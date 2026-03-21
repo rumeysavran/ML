@@ -103,6 +103,21 @@ python scripts/evaluate_models.py --holdout east   # must match train_models --h
 
 Writes **`evaluation_report.json`**: δ-RMSE on composition change, built-up false-change / missed-gain / stability-style metrics, and stress tests (Gaussian noise + NIR dropout). Methodology: [`docs/evaluation.md`](docs/evaluation.md).
 
+## Current baseline results
+
+Latest saved run (`--holdout east`):
+
+- **Ridge** macro RMSE: **0.0156**
+- **HistGradientBoosting** macro RMSE: **0.0164**
+- **Ridge** built false-change rate: **5.1%**
+- **HistGradientBoosting** built false-change rate: **7.6%**
+
+Interpretation:
+
+- **Ridge** is slightly better overall on this split and is the cleaner **interpretable baseline**.
+- **HistGradientBoosting** is more flexible and does better on some targets, but not enough to beat Ridge on macro RMSE here.
+- These numbers are useful, but still optimistic because the task is **same-city one-year forecasting** and the models use **2020 composition as an input**.
+
 ## Task definition (for the report)
 
 - **Spatial unit:** 300 m grid cells (`EPSG:32632`), `cell_id` encodes row-major order (`reference_grid()` in `src/geo/grid.py`).
@@ -115,15 +130,17 @@ Writes **`evaluation_report.json`**: δ-RMSE on composition change, built-up fal
 ```
 scripts/
   prepare_data.py      # download + feature table
-  train_models.py      # train + evaluate + save artifacts
+  train_models.py      # train models and save artifacts
+  evaluate_models.py   # change metrics + stress tests
 src/
   config.py            # bbox, years, paths, feature lists
   data/                # WorldCover + Sentinel-2 I/O
   geo/                 # grid / CRS helpers
   features/            # spectral indices + composition aggregation
-  models/              # dataset split, pipelines, training
+  models/              # dataset split, pipelines, training, evaluation
 docs/
   data_issues.md       # exploration issues + unfixed choice
+  evaluation.md        # evaluation methodology and metrics
 data/raw/              # GeoTIFF inputs (gitignored)
 data/processed/        # Parquet / GPKG (gitignored)
 artifacts/models/      # trained models + reports (gitignored)
@@ -136,7 +153,6 @@ artifacts/models/      # trained models + reports (gitignored)
 
 ## Next steps (remaining coursework)
 
-- Stress tests, change-specific metrics, and failure discussion (evaluation section).
 - Explainability UI: helpful vs **misleading** explanations for non-experts.
 - Two **“Arguing Against ChatGPT”** write-ups and usage log.
 - **Streamlit / Gradio** app: map, year selection, predictions, uncertainty/limitations.
