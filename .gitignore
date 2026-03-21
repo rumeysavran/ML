@@ -1,0 +1,12 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+data/raw/*.tif
+data/processed/*.tif
+data/processed/*.parquet
+data/processed/*.gpkg
+artifacts/models/*.joblib
+artifacts/models/*.csv
+artifacts/models/*.json

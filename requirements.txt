@@ -1,0 +1,22 @@
+# Core geospatial / ML stack for Nuremberg land-cover pipeline
+# Use Python 3.10–3.12 recommended (some wheels lag on 3.13).
+
+numpy>=1.26,<3
+pandas>=2.1,<3
+scipy>=1.11,<2
+scikit-learn>=1.4,<2
+
+rasterio>=1.3.10,<2
+rioxarray>=0.15,<1
+shapely>=2.0,<3
+pyproj>=3.6,<4
+geopandas>=0.14,<2
+
+pystac-client>=0.7,<1
+planetary-computer>=1.0,<2
+stackstac>=0.5,<1
+xarray>=2024.1,<2026
+dask[array]>=2024.1,<2026
+
+pyarrow>=15,<22
+tqdm>=4.66,<5
