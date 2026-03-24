@@ -22,6 +22,32 @@ from src.config import (
 from src.models.dataset import composition_forecasting_xy, spatial_train_test_mask
 from src.models.pipelines import build_hist_gbrt_pipeline, build_ridge_pipeline, ridge_coefficient_table
 
+try:
+    from inference import canonical_landcover_name, normalize_training_report
+except Exception:
+    def canonical_landcover_name(name: str | None) -> str | None:
+        low = str(name or "").lower()
+        if "built" in low:
+            return "built"
+        if "veget" in low:
+            return "vegetation"
+        if "water" in low:
+            return "water"
+        if "other" in low or "bare" in low:
+            return "other"
+        return None
+
+    def normalize_training_report(report, fallback_feature_names=None, fallback_target_names=None):
+        src = dict(report or {})
+        raw_targets = list(src.get("targets") or fallback_target_names or [])
+        return {
+            **src,
+            "feature_names": list(src.get("features") or fallback_feature_names or []),
+            "raw_target_names": raw_targets,
+            "target_names": [canonical_landcover_name(t) or t for t in raw_targets],
+            "holdout": src.get("holdout") or src.get("spatial_holdout") or "east",
+        }
+
 
 def _per_target_metrics(y_true: np.ndarray, y_pred: np.ndarray, names: List[str]) -> Dict[str, Any]:
     rows = []
@@ -86,6 +112,11 @@ def train_and_evaluate(
             ),
         },
     }
+    report = normalize_training_report(
+        report,
+        fallback_feature_names=feature_names,
+        fallback_target_names=target_names,
+    )
 
     joblib.dump(ridge, out_dir / "ridge_composition.joblib")
     joblib.dump(gbrt, out_dir / "hist_gbrt_composition.joblib")
@@ -100,8 +131,10 @@ def train_and_evaluate(
     )
 
     coef = ridge_coefficient_table(ridge, feature_names, target_names)
-    coef_df = pd.DataFrame(coef, columns=feature_names, index=target_names)
-    coef_df.to_csv(out_dir / "ridge_coefficients.csv")
+    coef_df = pd.DataFrame({"feature": feature_names})
+    for idx, raw_name in enumerate(target_names):
+        coef_df[f"coef_{canonical_landcover_name(raw_name) or raw_name}"] = coef[idx]
+    coef_df.to_csv(out_dir / "ridge_coefficients.csv", index=False)
 
     rng = np.random.default_rng(42)
     n_pi = min(1500, X_te.shape[0])

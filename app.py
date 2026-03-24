@@ -36,10 +36,15 @@ warnings.filterwarnings("ignore")
 # ── optional heavy deps (graceful degradation) ─────────────────────────
 try:
     import geopandas as gpd
-    import joblib
     HAS_GEO = True
 except ImportError:
     HAS_GEO = False
+
+try:
+    import joblib
+    HAS_JOBLIB = True
+except ImportError:
+    HAS_JOBLIB = False
 
 try:
     import plotly.express as px
@@ -124,18 +129,87 @@ except Exception:
     WATER_CODES  = {80}
     _CFG_LOADED  = False
 
-LC_COLORS = {
-    "built":      "#f59e0b",
-    "vegetation": "#22c55e",
-    "water":      "#38bdf8",
-    "other":      "#94a3b8",
+# ════════════════════════════════════════════════════════════════════════
+#  COLORS  (unified global color palette)
+# ════════════════════════════════════════════════════════════════════════
+COLORS = {
+    # Theme / UI colors
+    "theme": {
+        "bg_dark":           "#0f172a",
+        "bg_darker":         "#1e293b",
+        "border":            "#2d3f55",
+        "text_light":        "#e2e8f0",
+        "text_muted":        "#94a3b8",
+        "text_subtle":       "#64748b",
+        "accent_blue":       "#60a5fa",
+        "divider":           "#334155",
+    },
+    # Landcover composition colors (coarse categories)
+    "landcover": {
+        "built":      "#f59e0b",
+        "vegetation": "#22c55e",
+        "water":      "#38bdf8",
+        "other":      "#94a3b8",
+    },
+    # WorldCover class palette (code → hex color)
+    "worldcover": {
+        10: "#006400",  # Tree cover
+        20: "#ffbb22",  # Shrubland
+        30: "#ffff4c",  # Grassland
+        40: "#f096ff",  # Cropland
+        50: "#fa0000",  # Built-up
+        60: "#b4b4b4",  # Bare/sparse veg
+        70: "#f0f0f0",  # Snow/ice
+        80: "#0064c8",  # Water
+        90: "#0096a0",  # Herbaceous wetland
+        95: "#00cf75",  # Mangroves
+        100: "#fae6a0", # Moss/lichen
+    },
+    # Badge/alert colors
+    "badges": {
+        "green":  "#22c55e",
+        "blue":   "#3b82f6",
+        "red":    "#ef4444",
+        "yellow": "#f59e0b",
+    },
 }
+
+# Legacy aliases for backward compatibility
+LC_COLORS = COLORS["landcover"]
 LC_LABELS = {
     "built": "Built-up",
     "vegetation": "Vegetation",
     "water": "Water",
     "other": "Bare / Other",
 }
+
+
+try:
+    from inference import (
+        build_feature_matrix as infer_build_feature_matrix,
+        canonical_landcover_name as infer_canonical_landcover_name,
+        normalize_training_report as infer_normalize_training_report,
+        run_autoregressive_forecast as infer_run_autoregressive_forecast,
+    )
+except ImportError:
+    infer_build_feature_matrix = None
+    infer_canonical_landcover_name = None
+    infer_normalize_training_report = None
+    infer_run_autoregressive_forecast = None
+
+
+def _hex_to_rgba(hex_color: str, alpha: float) -> str:
+    value = str(hex_color).strip().lstrip("#")
+    if len(value) != 6:
+        return hex_color
+    try:
+        r = int(value[0:2], 16)
+        g = int(value[2:4], 16)
+        b = int(value[4:6], 16)
+    except ValueError:
+        return hex_color
+    alpha = max(0.0, min(1.0, float(alpha)))
+    return f"rgba({r},{g},{b},{alpha:.3f})"
 
 # ════════════════════════════════════════════════════════════════════════
 #  DATA LOADERS  (cached)
@@ -270,9 +344,14 @@ def load_grid() -> "gpd.GeoDataFrame | pd.DataFrame":
 
 @st.cache_data(show_spinner=False)
 def load_training_report() -> dict:
-    if TRAIN_REPORT.exists():
-        return json.loads(TRAIN_REPORT.read_text())
-    return _synthetic_training_report()
+    report = json.loads(TRAIN_REPORT.read_text()) if TRAIN_REPORT.exists() else _synthetic_training_report()
+    if infer_normalize_training_report is None:
+        return report
+    return infer_normalize_training_report(
+        report,
+        fallback_feature_names=FEAT_COLS_CFG,
+        fallback_target_names=TARGET_COLS_CFG,
+    )
 
 
 @st.cache_data(show_spinner=False)
@@ -298,7 +377,7 @@ def load_gbrt_importance() -> pd.DataFrame:
 
 @st.cache_resource(show_spinner=False)
 def load_models():
-    if RIDGE_MODEL.exists() and GBRT_MODEL.exists() and HAS_GEO:
+    if RIDGE_MODEL.exists() and GBRT_MODEL.exists() and HAS_JOBLIB:
         ridge = joblib.load(RIDGE_MODEL)
         gbrt  = joblib.load(GBRT_MODEL)
         return ridge, gbrt
@@ -575,121 +654,73 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.markdown("""
+st.markdown(f"""
 <style>
     /* Dark background matching the JSX dashboard */
-    .stApp { background-color: #0f172a; color: #e2e8f0; }
-    section[data-testid="stSidebar"] { background-color: #1e293b; }
-    .stTabs [data-baseweb="tab-list"] { background-color: #1e293b; border-radius: 8px; }
-    .stTabs [data-baseweb="tab"] { color: #64748b; }
-    .stTabs [aria-selected="true"] { color: #60a5fa !important; }
+    .stApp {{ background-color: {COLORS['theme']['bg_dark']}; color: {COLORS['theme']['text_light']}; }}
+    section[data-testid="stSidebar"] {{ background-color: {COLORS['theme']['bg_darker']}; }}
+    .stTabs [data-baseweb="tab-list"] {{ background-color: {COLORS['theme']['bg_darker']}; border-radius: 8px; }}
+    .stTabs [data-baseweb="tab"] {{ color: {COLORS['theme']['text_subtle']}; }}
+    .stTabs [aria-selected="true"] {{ color: {COLORS['theme']['accent_blue']} !important; }}
     /* Metric cards */
-    div[data-testid="metric-container"] {
-        background: #1e293b;
-        border: 1px solid #2d3f55;
+    div[data-testid="metric-container"] {{
+        background: {COLORS['theme']['bg_darker']};
+        border: 1px solid {COLORS['theme']['border']};
         border-radius: 10px;
         padding: 12px 16px;
-    }
-    div[data-testid="metric-container"] label { color: #64748b; font-size: 11px; }
-    div[data-testid="metric-container"] [data-testid="stMetricValue"] {
-        color: #60a5fa; font-size: 22px; font-weight: 700;
-    }
+    }}
+    div[data-testid="metric-container"] label {{ color: {COLORS['theme']['text_subtle']}; font-size: 11px; }}
+    div[data-testid="metric-container"] [data-testid="stMetricValue"] {{
+        color: {COLORS['theme']['accent_blue']}; font-size: 22px; font-weight: 700;
+    }}
     /* Cards */
-    .card {
-        background: #1e293b;
-        border: 1px solid #2d3f55;
+    .card {{
+        background: {COLORS['theme']['bg_darker']};
+        border: 1px solid {COLORS['theme']['border']};
         border-radius: 10px;
         padding: 16px;
         margin-bottom: 14px;
-    }
-    .card-title {
-        font-size: 11px; font-weight: 700; color: #64748b;
+    }}
+    .card-title {{
+        font-size: 11px; font-weight: 700; color: {COLORS['theme']['text_subtle']};
         text-transform: uppercase; letter-spacing: 0.06em;
         margin-bottom: 10px;
-    }
-    .badge-green  { background:#22c55e22; color:#22c55e; border:1px solid #22c55e44;
-                    border-radius:20px; padding:2px 9px; font-size:10px; font-weight:600; }
-    .badge-blue   { background:#3b82f622; color:#3b82f6; border:1px solid #3b82f644;
-                    border-radius:20px; padding:2px 9px; font-size:10px; font-weight:600; }
-    .badge-red    { background:#ef444422; color:#ef4444; border:1px solid #ef444444;
-                    border-radius:20px; padding:2px 9px; font-size:10px; font-weight:600; }
-    .badge-yellow { background:#f59e0b22; color:#f59e0b; border:1px solid #f59e0b44;
-                    border-radius:20px; padding:2px 9px; font-size:10px; font-weight:600; }
-    h1,h2,h3 { color: #f1f5f9 !important; }
-    hr { border-color: #334155; }
+    }}
+    .badge-green  {{ background:{COLORS['badges']['green']}22; color:{COLORS['badges']['green']}; border:1px solid {COLORS['badges']['green']}44;
+                    border-radius:20px; padding:2px 9px; font-size:10px; font-weight:600; }}
+    .badge-blue   {{ background:{COLORS['badges']['blue']}22; color:{COLORS['badges']['blue']}; border:1px solid {COLORS['badges']['blue']}44;
+                    border-radius:20px; padding:2px 9px; font-size:10px; font-weight:600; }}
+    .badge-red    {{ background:{COLORS['badges']['red']}22; color:{COLORS['badges']['red']}; border:1px solid {COLORS['badges']['red']}44;
+                    border-radius:20px; padding:2px 9px; font-size:10px; font-weight:600; }}
+    .badge-yellow {{ background:{COLORS['badges']['yellow']}22; color:{COLORS['badges']['yellow']}; border:1px solid {COLORS['badges']['yellow']}44;
+                    border-radius:20px; padding:2px 9px; font-size:10px; font-weight:600; }}
+    h1,h2,h3 {{ color: {COLORS['theme']['text_light']} !important; }}
+    hr {{ border-color: {COLORS['theme']['divider']}; }}
     /* Table */
-    table { width:100%; border-collapse:collapse; font-size:12px; }
-    th { color:#64748b; padding:7px 12px; border-bottom:1px solid #334155;
-         text-align:left; font-weight:600; }
-    td { color:#94a3b8; padding:7px 12px; border-bottom:1px solid #1e293b; }
-    td:first-child { color:#e2e8f0; font-weight:500; }
+    table {{ width:100%; border-collapse:collapse; font-size:12px; }}
+    th {{ color:{COLORS['theme']['text_subtle']}; padding:7px 12px; border-bottom:1px solid {COLORS['theme']['divider']};
+         text-align:left; font-weight:600; }}
+    td {{ color:{COLORS['theme']['text_muted']}; padding:7px 12px; border-bottom:1px solid {COLORS['theme']['bg_darker']}; }}
+    td:first-child {{ color:{COLORS['theme']['text_light']}; font-weight:500; }}
 </style>
 """, unsafe_allow_html=True)
 
 
-# ════════════════════════════════════════════════════════════════════════
-#  SIDEBAR
-# ════════════════════════════════════════════════════════════════════════
+# Store sidebar controls in session state (accessible throughout app)
+# Initialize with defaults on first run
+if "show_year" not in st.session_state:
+    st.session_state.show_year = 2021
+if "lc_target" not in st.session_state:
+    st.session_state.lc_target = "built"
+if "map_mode" not in st.session_state:
+    st.session_state.map_mode = "Composition"
+if "change_thr" not in st.session_state:
+    st.session_state.change_thr = 0.03
+if "active_model" not in st.session_state:
+    st.session_state.active_model = "Ridge (interpretable)"
 
-with st.sidebar:
-    st.markdown("## 🌍 Nuremberg Monitor")
-    st.markdown(
-        "<span class='badge-green'>Live Pipeline</span> "
-        "<span class='badge-blue'>Ridge + HistGBRT</span>",
-        unsafe_allow_html=True,
-    )
-    st.divider()
-
-    st.markdown("**Display settings**")
-    show_year   = st.selectbox("Composition year", [2020, 2021], index=1)
-    lc_target   = st.selectbox(
-        "Land-cover class (map)",
-        ["built", "vegetation", "water", "other"],
-        format_func=lambda k: LC_LABELS[k],
-    )
-    map_mode    = st.radio(
-        "Map layer",
-        ["Composition", "Δ Change 2020→2021"],
-        horizontal=True,
-    )
-    change_thr  = st.slider("Change threshold (pp)", 0.01, 0.10, 0.03, 0.01,
-                             help="Minimum |Δbuilt| to flag as urbanising/greening")
-
-    st.divider()
-    st.markdown("**Model comparison**")
-    active_model = st.radio(
-        "Active model",
-        ["Ridge (interpretable)", "HistGradientBoosting (flexible)"],
-        horizontal=False,
-    )
-    model_key = "ridge" if "Ridge" in active_model else "hist_gbrt"
-
-    st.divider()
-    st.markdown(
-        "<small style='color:#475569'>"
-        "Data: ESA WorldCover 2020/2021 · Sentinel-2 L2A July composites<br>"
-        "Grid: 300 m UTM cells (EPSG:32632)<br>"
-        "UTN Machine Learning WT 25/26"
-        "</small>",
-        unsafe_allow_html=True,
-    )
-    # ── Debug expander: shows real parquet columns to diagnose schema issues
-    with st.expander("🔧 Column inspector", expanded=False):
-        # Config load status
-        if _CFG_LOADED:
-            st.success("✓ src/config.py loaded successfully")
-        else:
-            st.warning("⚠ src/config.py not found — using built-in defaults")
-        st.caption(f"S2_YEARS={S2_YEARS_CFG}  S2_MONTH={S2_MONTH_CFG}  "
-                   f"GRID_RES=300m  CRS=EPSG:32632")
-        st.caption(f"BBOX={BBOX_WGS84}")
-        st.divider()
-        if FEATURES_PARQ.exists():
-            _raw = pd.read_parquet(FEATURES_PARQ)
-            st.caption(f"Parquet: {len(_raw)} rows × {len(_raw.columns)} cols")
-            st.code("\n".join(_raw.columns.tolist()))
-        else:
-            st.caption("Parquet not found — using synthetic data")
+# Derive model_key from session state (for use in all tabs)
+model_key = "ridge" if "Ridge" in st.session_state.active_model else "hist_gbrt"
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -703,62 +734,51 @@ with st.spinner("Loading pipeline artifacts …"):
     ridge_coefs = load_ridge_coefs()
     gbrt_imp    = load_gbrt_importance()
     change_df   = compute_change_df(df)
+    # Compute change categories based on session_state threshold
     change_df["category"] = change_df.apply(
-        lambda r: change_category(r, threshold=change_thr), axis=1
+        lambda r: change_category(r, threshold=st.session_state.change_thr), axis=1
     )
 
 # Build prediction columns if models are loaded
 ridge_model, gbrt_model = load_models()
 feature_names = train_rep.get("feature_names", [])
 target_names  = train_rep.get("target_names", ["built","vegetation","water","other"])
+base_feature_year = int(train_rep.get("base_year", min(S2_YEARS_CFG) if S2_YEARS_CFG else 2020))
+spectral_fallback_year = int(train_rep.get("target_year", max(S2_YEARS_CFG) if S2_YEARS_CFG else base_feature_year + 1))
 
-if ridge_model is not None and feature_names:
-    avail = [f for f in feature_names if f in df.columns]
-    if avail:
-        Xall = df[avail].fillna(0).values
-        ridge_preds = ridge_model.predict(Xall)
-        gbrt_preds  = gbrt_model.predict(Xall)
-        for i, t in enumerate(target_names):
-            df[f"ridge_pred_{t}"] = ridge_preds[:, i] if ridge_preds.ndim > 1 else ridge_preds
-            df[f"gbrt_pred_{t}"]  = gbrt_preds[:, i]  if gbrt_preds.ndim > 1  else gbrt_preds
+if ridge_model is not None and feature_names and infer_build_feature_matrix is not None:
+    Xall = infer_build_feature_matrix(
+        df,
+        feature_names,
+        spectral_year=base_feature_year,
+        spectral_fallback_year=spectral_fallback_year,
+        composition_year=base_feature_year,
+        composition_fallback_year=spectral_fallback_year,
+    )
+    ridge_preds = np.asarray(ridge_model.predict(Xall), dtype=float)
+    if ridge_preds.ndim == 1:
+        ridge_preds = ridge_preds.reshape(-1, 1)
+    gbrt_preds = None
+    if gbrt_model is not None:
+        gbrt_preds = np.asarray(gbrt_model.predict(Xall), dtype=float)
+        if gbrt_preds.ndim == 1:
+            gbrt_preds = gbrt_preds.reshape(-1, 1)
+    for i, t in enumerate(target_names):
+        name = infer_canonical_landcover_name(t) if infer_canonical_landcover_name is not None else t
+        if i < ridge_preds.shape[1]:
+            df[f"ridge_pred_{name}"] = ridge_preds[:, i]
+        if gbrt_preds is not None and i < gbrt_preds.shape[1]:
+            df[f"gbrt_pred_{name}"] = gbrt_preds[:, i]
 
 
-# ════════════════════════════════════════════════════════════════════════
-#  HEADER
-# ════════════════════════════════════════════════════════════════════════
 
-st.markdown(
-    "<h1 style='margin-bottom:4px'>🌍 Nuremberg Land-Cover Change Monitor</h1>"
-    "<p style='color:#475569;font-size:13px;margin-top:0'>"
-    "ML-powered composition forecasting · ESA WorldCover + Sentinel-2 · UTN ML WT 25/26"
-    "</p>",
-    unsafe_allow_html=True,
-)
-
-# ── Quick KPI strip ──────────────────────────────────────────────────
-metrics = train_rep.get("metrics", {})
-m_ridge = metrics.get("ridge", {})
-m_gbrt  = metrics.get("hist_gbrt", {})
-ev      = eval_rep.get("change_metrics", {})
-ev_r    = ev.get("ridge", {})
-ev_g    = ev.get("hist_gbrt", {})
-
-c1,c2,c3,c4,c5,c6 = st.columns(6)
-c1.metric("Ridge macro RMSE",  f"{m_ridge.get('macro_rmse', 0.0156):.4f}")
-c2.metric("HistGBRT macro RMSE", f"{m_gbrt.get('macro_rmse', 0.0164):.4f}")
-c3.metric("Ridge Δ-RMSE built", f"{ev_r.get('delta_rmse_built', 0.0218):.4f}")
-c4.metric("Ridge false-change", f"{ev_r.get('false_change_rate_built', 0.051)*100:.1f}%")
-c5.metric("HistGBRT false-change", f"{ev_g.get('false_change_rate_built', 0.076)*100:.1f}%")
-c6.metric("Grid cells", f"{len(df):,}")
-
-st.divider()
 
 
 # ════════════════════════════════════════════════════════════════════════
 #  TABS
 # ════════════════════════════════════════════════════════════════════════
 
-tab_map, tab_explore, tab_model, tab_eval, tab_explain, tab_about, tab_raw, tab_change = st.tabs([
+tab_map, tab_explore, tab_model, tab_eval, tab_explain, tab_about, tab_raw, tab_change, tab_forecast = st.tabs([
     "🗺️ Map",
     "🔬 Data Exploration",
     "🤖 ML Pipeline",
@@ -767,6 +787,7 @@ tab_map, tab_explore, tab_model, tab_eval, tab_explain, tab_about, tab_raw, tab_
     "ℹ️ About & Limits",
     "🛰️ Raw Imagery",
     "🔴 Change Map",
+    "🔮 Forecast",
 ])
 
 
@@ -774,18 +795,90 @@ tab_map, tab_explore, tab_model, tab_eval, tab_explain, tab_about, tab_raw, tab_
 #  TAB 1 — MAP
 # ══════════════════════════════════════════════════════════════════════
 with tab_map:
+    # Header
+    st.markdown(
+        "<h1 style='margin-bottom:4px'>🌍 Nuremberg Land-Cover Change Monitor</h1>"
+        "<p style='color:#475569;font-size:13px;margin-top:0'>"
+        "ML-powered composition forecasting · ESA WorldCover + Sentinel-2 · UTN ML WT 25/26"
+        "</p>",
+        unsafe_allow_html=True,
+    )
+    
+    # Display settings in columns for compactness
+    st.markdown("**Display Settings & Model Metrics**")
+    col_set1, col_set2, col_set3, col_set4 = st.columns(4)
+    
+    with col_set1:
+        st.session_state.show_year = st.selectbox("📅 Year", [2020, 2021], 
+                                                   index=1 if st.session_state.show_year == 2021 else 0)
+    
+    with col_set2:
+        st.session_state.lc_target = st.selectbox(
+            "🎨 Land-cover",
+            ["built", "vegetation", "water", "other"],
+            index=["built", "vegetation", "water", "other"].index(st.session_state.lc_target),
+            format_func=lambda k: LC_LABELS[k],
+        )
+    
+    with col_set3:
+        st.session_state.map_mode = st.radio(
+            "Map mode",
+            ["Composition", "Δ Change"],
+            horizontal=True,
+            index=0 if st.session_state.map_mode == "Composition" else 1,
+        )
+    
+    with col_set4:
+        st.session_state.change_thr = st.slider("Δ threshold", 0.01, 0.10, st.session_state.change_thr, 0.01)
+        # Recompute change categories when threshold changes
+        change_df["category"] = change_df.apply(
+            lambda r: change_category(r, threshold=st.session_state.change_thr), axis=1
+        )
+    
+    # Model selector
+    col_model1, col_model2 = st.columns([2, 1])
+    with col_model1:
+        st.session_state.active_model = st.radio(
+            "🤖 Active Model",
+            ["Ridge (interpretable)", "HistGradientBoosting (flexible)"],
+            horizontal=True,
+            index=0 if "Ridge" in st.session_state.active_model else 1,
+        )
+    
+    model_key = "ridge" if "Ridge" in st.session_state.active_model else "hist_gbrt"
+    
+    # KPI strip
+    st.markdown("**Model Performance**")
+    metrics = train_rep.get("metrics", {})
+    m_ridge = metrics.get("ridge", {})
+    m_gbrt  = metrics.get("hist_gbrt", {})
+    ev      = eval_rep.get("change_metrics", {})
+    ev_r    = ev.get("ridge", {})
+    ev_g    = ev.get("hist_gbrt", {})
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("Ridge RMSE",  f"{m_ridge.get('macro_rmse', 0.0156):.4f}")
+    c2.metric("GBRT RMSE", f"{m_gbrt.get('macro_rmse', 0.0164):.4f}")
+    c3.metric("Ridge Δ-RMSE", f"{ev_r.get('delta_rmse_built', 0.0218):.4f}")
+    c4.metric("Ridge False-pos", f"{ev_r.get('false_change_rate_built', 0.051)*100:.1f}%")
+    c5.metric("GBRT False-pos", f"{ev_g.get('false_change_rate_built', 0.076)*100:.1f}%")
+    c6.metric("Grid cells", f"{len(df):,}")
+
+    st.divider()
+    
+    # Map content
     col_map, col_info = st.columns([3, 1])
 
     with col_map:
-        if map_mode == "Composition":
-            val_col  = f"{lc_target}_{show_year}"
-            title    = f"{LC_LABELS[lc_target]} proportion · {show_year}"
+        if st.session_state.map_mode == "Composition":
+            val_col  = f"{st.session_state.lc_target}_{st.session_state.show_year}"
+            title    = f"{LC_LABELS[st.session_state.lc_target]} proportion · {st.session_state.show_year}"
             cscale   = {"built":"YlOrRd","vegetation":"Greens",
-                        "water":"Blues","other":"Greys"}[lc_target]
+                        "water":"Blues","other":"Greys"}[st.session_state.lc_target]
         else:
-            val_col = f"delta_{lc_target}"
-            title   = f"Δ {LC_LABELS[lc_target]} · 2020→2021"
-            cscale  = "RdYlGn_r" if lc_target == "built" else "RdYlGn"
+            val_col = f"delta_{st.session_state.lc_target}"
+            title   = f"Δ {LC_LABELS[st.session_state.lc_target]} · 2020→2021"
+            cscale  = "RdYlGn_r" if st.session_state.lc_target == "built" else "RdYlGn"
 
         if val_col in change_df.columns or val_col in df.columns:
             plot_df = change_df if val_col in change_df.columns else df
@@ -795,7 +888,7 @@ with tab_map:
             st.info(f"Column `{val_col}` not found — run the pipeline to generate real data.")
 
         # Change category map
-        if map_mode == "Δ Change 2020→2021" and "delta_built" in change_df.columns:
+        if st.session_state.map_mode == "Δ Change" and "delta_built" in change_df.columns:
             cat_map = {"stable": 0, "urbanising": 1, "greening": -1}
             cd = change_df.copy()
             cd["cat_num"] = cd["category"].map(cat_map)
@@ -810,7 +903,7 @@ with tab_map:
                     unsafe_allow_html=True)
 
         for lc in ["built", "vegetation", "water", "other"]:
-            col_name = f"{lc}_{show_year}"
+            col_name = f"{lc}_{st.session_state.show_year}"
             if col_name in df.columns:
                 mean_val = df[col_name].mean() * 100
                 st.markdown(
@@ -923,10 +1016,10 @@ with tab_explore:
             title="Δ Built-up proportion 2020→2021 (change labels)",
             color_discrete_sequence=["#f59e0b"],
         )
-        fig.add_vline(x=change_thr,  line_color="#ef4444", line_dash="dash",
-                      annotation_text=f"+{change_thr:.2f} threshold")
-        fig.add_vline(x=-change_thr, line_color="#22c55e", line_dash="dash",
-                      annotation_text=f"-{change_thr:.2f} threshold")
+        fig.add_vline(x=st.session_state.change_thr,  line_color="#ef4444", line_dash="dash",
+                      annotation_text=f"+{st.session_state.change_thr:.2f} threshold")
+        fig.add_vline(x=-st.session_state.change_thr, line_color="#22c55e", line_dash="dash",
+                      annotation_text=f"-{st.session_state.change_thr:.2f} threshold")
         fig.update_layout(
             paper_bgcolor="#1e293b", plot_bgcolor="#1e293b",
             font_color="#e2e8f0", height=250,
@@ -1682,19 +1775,20 @@ def _load_s2_ndvi(year: int, month: int) -> "np.ndarray | None":
         return None
 
 
-# WorldCover class palette  (code → label, hex colour)
+# WorldCover class palette with labels (code → (label, hex colour))
+# Colors are sourced from COLORS["worldcover"]
 WC_PALETTE = {
-    10: ("Tree cover",        "#006400"),
-    20: ("Shrubland",         "#FFBB22"),
-    30: ("Grassland",         "#FFFF4C"),
-    40: ("Cropland",          "#F096FF"),
-    50: ("Built-up",          "#FA0000"),
-    60: ("Bare/sparse veg",   "#B4B4B4"),
-    70: ("Snow/ice",          "#F0F0F0"),
-    80: ("Water",             "#0064C8"),
-    90: ("Herbaceous wetland","#0096A0"),
-    95: ("Mangroves",         "#00CF75"),
-    100:("Moss/lichen",       "#FAE6A0"),
+    10: ("Tree cover",         COLORS["worldcover"][10]),
+    20: ("Shrubland",          COLORS["worldcover"][20]),
+    30: ("Grassland",          COLORS["worldcover"][30]),
+    40: ("Cropland",           COLORS["worldcover"][40]),
+    50: ("Built-up",           COLORS["worldcover"][50]),
+    60: ("Bare/sparse veg",    COLORS["worldcover"][60]),
+    70: ("Snow/ice",           COLORS["worldcover"][70]),
+    80: ("Water",              COLORS["worldcover"][80]),
+    90: ("Herbaceous wetland", COLORS["worldcover"][90]),
+    95: ("Mangroves",          COLORS["worldcover"][95]),
+    100:("Moss/lichen",        COLORS["worldcover"][100]),
 }
 
 @st.cache_data(show_spinner=False)
@@ -2210,3 +2304,423 @@ with tab_change:
                     st.plotly_chart(fig_s, use_container_width=True)
                 else:
                     st.info(f"No S2 raster for {yr}. Run prepare_data.py --fetch-s2")
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  TAB 9 — FORECAST  (autoregressive multi-year prediction)
+# ══════════════════════════════════════════════════════════════════════
+
+# ── Core forecasting engine ───────────────────────────────────────────
+def _run_forecast(
+    df: pd.DataFrame,
+    model,
+    feature_names: list,
+    target_names: list,
+    n_steps: int,
+    base_year: int = 2021,
+    per_step_rmse: float = 0.016,
+) -> dict:
+    """Run autoregressive multi-year forecast using the shared inference path."""
+    if model is None or not feature_names:
+        return {}
+    if infer_run_autoregressive_forecast is None:
+        return {}
+    return infer_run_autoregressive_forecast(
+        df,
+        model,
+        feature_names,
+        target_names,
+        n_steps=n_steps,
+        base_year=base_year,
+        per_step_rmse=per_step_rmse,
+    )
+
+
+
+@st.cache_data(show_spinner=False)
+def _run_forecast_cached(_model_key: str, n_steps: int) -> dict:
+    """Cached wrapper — re-runs only when model or horizon changes."""
+    _model = ridge_model if _model_key == "ridge" else gbrt_model
+    if _model is None:
+        return {}
+    feat_names   = train_rep.get("feature_names", FEAT_COLS_CFG)
+    target_names = train_rep.get("target_names",
+                                 ["label_prop_built","label_prop_vegetation",
+                                  "label_prop_water","label_prop_other"])
+    per_step_rmse = train_rep.get("metrics", {}).get(
+        _model_key, {}
+    ).get("macro_rmse", 0.016)
+
+    return _run_forecast(
+        df, _model, feat_names, target_names,
+        n_steps=n_steps, base_year=2021,
+        per_step_rmse=per_step_rmse,
+    )
+
+
+# ── Forecast tab UI ───────────────────────────────────────────────────
+with tab_forecast:
+    st.markdown("### 🔮 Future Land-Cover Forecast")
+    st.markdown(
+        "<p style='color:#64748b;font-size:13px'>"
+        "Autoregressive multi-year forecast using the trained Ridge or HistGBRT model. "
+        "Starting from the last known state (2021), each year's predicted composition "
+        "is fed back as input to predict the next year. "
+        "Sentinel-2 spectral features are held fixed at their 2021 values — "
+        "no future imagery is assumed.</p>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Controls ──────────────────────────────────────────────────────
+    fc1, fc2, fc3 = st.columns([1, 1, 2])
+    with fc1:
+        fc_model_choice = st.radio(
+            "Forecast model",
+            ["Ridge", "HistGradientBoosting"],
+            horizontal=False,
+            key="fc_model",
+        )
+        fc_model_key = "ridge" if fc_model_choice == "Ridge" else "hist_gbrt"
+
+    with fc2:
+        fc_horizon = st.slider(
+            "Forecast horizon (years)",
+            min_value=1, max_value=10, value=5, step=1,
+            key="fc_horizon",
+            help="Years ahead from 2021. Uncertainty grows with each step.",
+        )
+        fc_target_year = st.selectbox(
+            "Display year",
+            list(range(2022, 2022 + fc_horizon)),
+            index=fc_horizon - 1,
+            key="fc_target_year",
+        )
+
+    with fc3:
+        st.markdown(
+            "<div class='card'>"
+            "<div class='card-title'>⚠️ Forecast caveats</div>"
+            "<ul style='margin:0;padding-left:14px;font-size:11px;color:#64748b;line-height:1.9'>"
+            "<li><b>No future imagery</b> — spectral features fixed at 2021; "
+            "real land-cover change driven by new development is not captured.</li>"
+            "<li><b>Uncertainty grows</b> each year as √n × RMSE. "
+            "Beyond ~3 years the intervals are wide enough that individual-cell "
+            "changes are unreliable.</li>"
+            "<li><b>Trend extrapolation only</b> — no shocks, policy changes, "
+            "or infrastructure events are modelled.</li>"
+            "<li><b>Do not use</b> for planning, legal, or regulatory decisions.</li>"
+            "</ul></div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Run forecast ─────────────────────────────────────────────────
+    if ridge_model is None and gbrt_model is None:
+        st.error(
+            "No trained models found. Run `python scripts/train_models.py` first, "
+            "then restart the app."
+        )
+        st.stop()
+
+    with st.spinner(f"Running {fc_horizon}-year autoregressive forecast …"):
+        fc_results = _run_forecast_cached(fc_model_key, fc_horizon)
+
+    if not fc_results:
+        st.error("Forecast failed — check that feature_names in training_report.json match the parquet schema.")
+        st.stop()
+
+    # ── KPI strip for selected year ───────────────────────────────────
+    yr_data  = fc_results.get(fc_target_year, {})
+    base_data = fc_results.get("base", {})
+
+    if yr_data and base_data:
+        k1, k2, k3, k4, k5 = st.columns(5)
+        delta_bu = float(yr_data["built"].mean() - base_data["built"].mean()) * 100
+        delta_vg = float(yr_data["vegetation"].mean() - base_data["vegetation"].mean()) * 100
+        unc_mean = float(yr_data["uncertainty"].mean()) * 100
+        k1.metric("Forecast year",    str(fc_target_year))
+        k2.metric("Avg built-up",     f"{yr_data['built'].mean()*100:.1f}%",
+                  delta=f"{delta_bu:+.2f} pp vs 2021")
+        k3.metric("Avg vegetation",   f"{yr_data['vegetation'].mean()*100:.1f}%",
+                  delta=f"{delta_vg:+.2f} pp vs 2021")
+        k4.metric("Avg uncertainty",  f"±{unc_mean:.1f} pp",
+                  help="√steps × per-step RMSE propagated in quadrature")
+        years_ahead = fc_target_year - 2021
+        k5.metric("Years ahead",      str(years_ahead))
+
+    st.divider()
+
+    # ── Map row: composition + change + uncertainty ───────────────────
+    map_col_label = st.columns([1])[0]
+    map_col_label.markdown("#### Predicted composition maps · " + str(fc_target_year))
+
+    m1, m2, m3 = st.columns(3)
+
+    def _fc_heatmap(values: np.ndarray, title: str, colorscale: str,
+                    df_ref: pd.DataFrame = df) -> "go.Figure":
+        """Plot a forecast array as a grid heatmap using df row/col layout."""
+        plot = df_ref[["row", "col"]].copy()
+        plot["v"] = values
+        plot = plot.groupby(["row", "col"], as_index=False)["v"].mean()
+        try:
+            pivot = plot.pivot(index="row", columns="col", values="v")
+        except Exception:
+            pivot = plot.pivot_table(index="row", columns="col", values="v", aggfunc="mean")
+        fig = go.Figure(go.Heatmap(
+            z=pivot.values,
+            colorscale=colorscale,
+            zmin=0, zmax=1,
+            showscale=True,
+            hovertemplate="Row %{y}, Col %{x}<br>%{z:.3f}<extra></extra>",
+        ))
+        fig.update_layout(
+            title=title, height=340,
+            margin=dict(l=0, r=0, t=36, b=0),
+            paper_bgcolor="#1e293b", plot_bgcolor="#1e293b",
+            font_color="#e2e8f0", title_font_size=12,
+        )
+        fig.update_xaxes(showticklabels=False)
+        fig.update_yaxes(showticklabels=False, autorange="reversed")
+        return fig
+
+    if yr_data:
+        with m1:
+            fig = _fc_heatmap(yr_data["built"], f"Built-up · {fc_target_year}", "YlOrRd")
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption(f"Mean: {yr_data['built'].mean()*100:.1f}%")
+
+        with m2:
+            fig = _fc_heatmap(yr_data["vegetation"], f"Vegetation · {fc_target_year}", "Greens")
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption(f"Mean: {yr_data['vegetation'].mean()*100:.1f}%")
+
+        with m3:
+            fig = _fc_heatmap(yr_data["uncertainty"],
+                              f"Forecast uncertainty · {fc_target_year}",
+                              "Purples")
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption(
+                f"±{yr_data['uncertainty'].mean()*100:.1f} pp avg. "
+                "Purple = high uncertainty — treat with caution."
+            )
+
+    st.divider()
+
+    # ── Change map: delta vs 2021 ─────────────────────────────────────
+    st.markdown(f"#### Predicted change vs 2021 baseline · {fc_target_year}")
+
+    ch1, ch2 = st.columns(2)
+
+    with ch1:
+        if yr_data and "delta_built" in yr_data:
+            delta = yr_data["delta_built"]
+            plot  = df[["row","col"]].copy()
+            plot["delta"] = delta
+            plot = plot.groupby(["row","col"], as_index=False)["delta"].mean()
+            try:
+                pivot_d = plot.pivot(index="row", columns="col", values="delta")
+            except Exception:
+                pivot_d = plot.pivot_table(index="row", columns="col",
+                                            values="delta", aggfunc="mean")
+            _abs_max = max(abs(float(pivot_d.values[~np.isnan(pivot_d.values)].max())),
+                           abs(float(pivot_d.values[~np.isnan(pivot_d.values)].min())),
+                           0.05)
+            fig_d = go.Figure(go.Heatmap(
+                z=pivot_d.values,
+                colorscale="RdYlGn_r",
+                zmid=0, zmin=-_abs_max, zmax=_abs_max,
+                showscale=True,
+                colorbar=dict(title="Δ built-up", tickformat=".2f"),
+                hovertemplate="Row %{y}, Col %{x}<br>Δ = %{z:.3f}<extra></extra>",
+            ))
+            fig_d.update_layout(
+                title=f"Δ Built-up 2021→{fc_target_year} (red = urbanisation)",
+                height=360,
+                margin=dict(l=0, r=0, t=36, b=0),
+                paper_bgcolor="#1e293b", plot_bgcolor="#1e293b",
+                font_color="#e2e8f0", title_font_size=12,
+            )
+            fig_d.update_xaxes(showticklabels=False)
+            fig_d.update_yaxes(showticklabels=False, autorange="reversed")
+            st.plotly_chart(fig_d, use_container_width=True)
+
+            # Change category counts
+            thr = st.session_state.change_thr
+            n_urban  = int((delta >  thr).sum())
+            n_green  = int((delta < -thr).sum())
+            n_stable = int((np.abs(delta) <= thr).sum())
+            n_unc    = int((yr_data["uncertainty"] >= 0.10).sum())
+            for cat, n, col in [
+                ("Urbanising", n_urban,  "#f87171"),
+                ("Greening",   n_green,  "#4ade80"),
+                ("Stable",     n_stable, "#64748b"),
+                ("High uncertainty", n_unc, "#a78bfa"),
+            ]:
+                st.markdown(
+                    f"<div style='display:flex;justify-content:space-between;"
+                    f"font-size:12px;margin-bottom:3px'>"
+                    f"<span style='color:{col}'>● {cat}</span>"
+                    f"<b>{n} cells ({n/len(df)*100:.0f}%)</b></div>",
+                    unsafe_allow_html=True,
+                )
+
+    with ch2:
+        # Dominant class map for forecast year
+        if yr_data and "dominant" in yr_data:
+            dom = yr_data["dominant"]
+            dom_num = np.array([
+                {"built": 3, "vegetation": 2, "water": 1, "other": 0}[d]
+                for d in dom
+            ], dtype=float)
+            plot_dom = df[["row","col"]].copy()
+            plot_dom["dom"] = dom_num
+            plot_dom = plot_dom.groupby(["row","col"], as_index=False)["dom"].mean()
+            try:
+                pivot_dom = plot_dom.pivot(index="row", columns="col", values="dom")
+            except Exception:
+                pivot_dom = plot_dom.pivot_table(index="row", columns="col",
+                                                  values="dom", aggfunc="mean")
+            fig_dom = go.Figure(go.Heatmap(
+                z=pivot_dom.values,
+                colorscale=[
+                    [0.00, "#94a3b8"],   # 0 = other
+                    [0.33, "#38bdf8"],   # 1 = water
+                    [0.67, "#22c55e"],   # 2 = vegetation
+                    [1.00, "#f59e0b"],   # 3 = built
+                ],
+                zmin=0, zmax=3,
+                showscale=False,
+                hovertemplate="Row %{y}, Col %{x}<extra></extra>",
+            ))
+            fig_dom.update_layout(
+                title=f"Dominant land-cover class · {fc_target_year}",
+                height=360,
+                margin=dict(l=0, r=0, t=36, b=0),
+                paper_bgcolor="#1e293b", plot_bgcolor="#1e293b",
+                font_color="#e2e8f0", title_font_size=12,
+            )
+            fig_dom.update_xaxes(showticklabels=False)
+            fig_dom.update_yaxes(showticklabels=False, autorange="reversed")
+            st.plotly_chart(fig_dom, use_container_width=True)
+
+            # Legend
+            st.markdown(
+                "<div style='display:flex;gap:14px;flex-wrap:wrap;margin-top:4px'>"
+                + "".join([
+                    f"<div style='display:flex;align-items:center;gap:5px;font-size:11px'>"
+                    f"<div style='width:12px;height:12px;background:{c};border-radius:2px'></div>"
+                    f"<span style='color:#94a3b8'>{l}</span></div>"
+                    for c, l in [
+                        ("#f59e0b","Built-up"),
+                        ("#22c55e","Vegetation"),
+                        ("#38bdf8","Water"),
+                        ("#94a3b8","Bare/Other"),
+                    ]
+                ])
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+
+    st.divider()
+
+    # ── Time-series chart: city-wide averages across all forecast years ───
+    st.markdown("#### City-wide average composition · 2020–" + str(2021 + fc_horizon))
+
+    ts_rows = []
+    # Add known historical years
+    for yr, lbl in [(2020, "observed"), (2021, "observed")]:
+        for lc in ["built", "vegetation", "water", "other"]:
+            col = f"{lc}_{yr}"
+            if col in df.columns:
+                ts_rows.append({
+                    "year": yr, "class": LC_LABELS[lc],
+                    "proportion": float(df[col].mean()),
+                    "type": lbl,
+                    "unc_lo": None, "unc_hi": None,
+                })
+
+    # Add forecast years
+    for yr in range(2022, 2022 + fc_horizon):
+        yd = fc_results.get(yr, {})
+        if not yd:
+            continue
+        unc = float(yd["uncertainty"].mean())
+        for lc in ["built", "vegetation", "water", "other"]:
+            mean_val = float(yd[lc].mean())
+            ts_rows.append({
+                "year": yr, "class": LC_LABELS[lc],
+                "proportion": mean_val,
+                "type": "forecast",
+                "unc_lo": max(0, mean_val - unc),
+                "unc_hi": min(1, mean_val + unc),
+            })
+
+    ts_df = pd.DataFrame(ts_rows)
+
+    color_map = {
+        LC_LABELS["built"]:      "#f59e0b",
+        LC_LABELS["vegetation"]: "#22c55e",
+        LC_LABELS["water"]:      "#38bdf8",
+        LC_LABELS["other"]:      "#94a3b8",
+    }
+
+    fig_ts = go.Figure()
+    for lc_label, col_hex in color_map.items():
+        sub = ts_df[ts_df["class"] == lc_label].sort_values("year")
+        obs = sub[sub["type"] == "observed"]
+        frc = sub[sub["type"] == "forecast"]
+
+        # Observed line (solid)
+        fig_ts.add_trace(go.Scatter(
+            x=obs["year"], y=obs["proportion"] * 100,
+            mode="lines+markers",
+            name=f"{lc_label} (observed)",
+            line=dict(color=col_hex, width=2),
+            marker=dict(size=7),
+        ))
+        # Forecast line (dashed)
+        if not frc.empty:
+            # Uncertainty band
+            fig_ts.add_trace(go.Scatter(
+                x=pd.concat([frc["year"], frc["year"].iloc[::-1]]),
+                y=pd.concat([frc["unc_hi"] * 100,
+                             frc["unc_lo"].iloc[::-1] * 100]),
+                fill="toself",
+                fillcolor=_hex_to_rgba(col_hex, 0.13),
+                line=dict(color="rgba(0,0,0,0)"),
+                showlegend=False,
+                hoverinfo="skip",
+            ))
+            fig_ts.add_trace(go.Scatter(
+                x=frc["year"], y=frc["proportion"] * 100,
+                mode="lines+markers",
+                name=f"{lc_label} (forecast)",
+                line=dict(color=col_hex, width=2, dash="dash"),
+                marker=dict(size=6, symbol="diamond"),
+            ))
+
+    # Vertical line at last known year
+    fig_ts.add_vline(
+        x=2021.5, line_color="#475569", line_dash="dot",
+        annotation_text="← observed | forecast →",
+        annotation_font_color="#64748b",
+        annotation_font_size=10,
+    )
+
+    fig_ts.update_layout(
+        height=380,
+        margin=dict(l=10, r=10, t=20, b=10),
+        paper_bgcolor="#1e293b", plot_bgcolor="#1e293b",
+        font_color="#e2e8f0",
+        yaxis_title="City-wide average (%)",
+        xaxis_title="Year",
+        legend=dict(bgcolor="#0f172a", font_size=10, orientation="h",
+                    x=0, y=-0.2),
+        xaxis=dict(dtick=1),
+    )
+    st.plotly_chart(fig_ts, use_container_width=True)
+    st.caption(
+        "Solid lines = 2020/2021 WorldCover observations. "
+        "Dashed lines = model forecast. "
+        "Shaded bands = ±1 propagated uncertainty (grows as √steps × RMSE). "
+        "All spectral features held at 2021 values."
+    )

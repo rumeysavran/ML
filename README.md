@@ -86,6 +86,13 @@ The app runs even without artifacts. It uses demo data if needed.
   * Nonlinear model
   * Uses permutation importance
 
+### Prediction
+
+* One-step inference: predict 2021 composition from 2020 features
+* Autoregressive forecasting: multi-year future projections
+* Uncertainty quantification: estimates confidence bounds per timestep
+* Spectral inputs held constant (assumes future imagery similar to base year)
+
 ### Evaluation
 
 * Spatial holdout split
@@ -217,6 +224,13 @@ The app contains multiple views:
   * Pixel-level ground truth
   * Transition matrix
 
+* Forecast
+
+  * Multi-year autoregressive prediction
+  * Interactive horizon and model selection
+  * Uncertainty bands per land-cover class
+  * Export predictions as CSV
+
 ---
 
 ## Project Structure
@@ -242,6 +256,29 @@ data/
 artifacts/
   models/
 ```
+
+---
+
+## Prediction & Forecasting
+
+The app includes both inference and forecasting capabilities:
+
+### One-Step Prediction
+
+Predicts 2021 land-cover composition from 2020 features using trained models.
+Outputs are displayed in the **Map** tab and integrated into the grid cells.
+
+### Autoregressive Forecast
+
+The **Forecast** tab enables multi-year projections:
+
+* Select forecast horizon (1–10 years)
+* Choose active model (Ridge or HistGradientBoosting)
+* View predicted composition trajectories per class
+* See uncertainty estimates that grow with forecast length
+* Export predictions as CSV for further analysis
+
+**Important:** Forecasting assumes constant spectral inputs (Sentinel-2 bands held at base year). This is a simplification; future real spectral data may differ.
 
 ---
 
